@@ -11,3 +11,5 @@ python -m enterprise_retrieval index --work-dir work
 python -m enterprise_retrieval search --work-dir work \
   --question "What are the file upload size limits?"
 ```
+
+Reference-document recall is evaluated separately from answer correctness.
