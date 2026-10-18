@@ -13,3 +13,5 @@ python -m enterprise_retrieval search --work-dir work \
 ```
 
 Reference-document recall is evaluated separately from answer correctness.
+
+BM25 candidates can be reranked with the pinned BGE cross-encoder.

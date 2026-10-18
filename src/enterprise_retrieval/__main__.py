@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import corpus
+from . import corpus, rerank
 from .evaluation import evaluate
 from .search import Retriever
 
@@ -17,6 +17,7 @@ def main():
         command.add_argument("--work-dir", type=Path, default=Path("work"))
         if name in {"search", "evaluate"}:
             command.add_argument("--method", choices=["bm25"], default="bm25")
+            command.add_argument("--no-rerank", action="store_true")
         if name == "search":
             command.add_argument("--question", required=True)
         if name == "evaluate":
@@ -28,11 +29,16 @@ def main():
     work = args.work_dir
     if args.command == "download":
         corpus.prepare(work / "data")
+        (work / "models").mkdir(parents=True, exist_ok=True)
+        rerank.prepare(work / "models/reranker")
     elif args.command == "index":
         corpus.build_index(work / "data", work / "documents.sqlite")
     else:
         generator = None
-        retriever = Retriever(work / "documents.sqlite")
+        retriever = Retriever(
+            work / "documents.sqlite",
+            reranker_model=None if args.no_rerank else work / "models/reranker",
+        )
         if args.command == "search":
             result = retriever.search(args.question, args.method, "none", generator)
             print(json.dumps(result, indent=2))
