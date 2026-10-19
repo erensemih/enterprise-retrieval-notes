@@ -52,7 +52,7 @@ def paired_interval(differences, split, repeats=2000):
     }
 
 
-def evaluate(retriever, questions, method="bm25", feedback="none", generate=None):
+def evaluate(retriever, questions, method="hybrid", feedback="none", generate=None):
     """Retrieve before consulting references; missing and ambiguous labels remain NA."""
     import json
 

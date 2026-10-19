@@ -16,7 +16,7 @@ def main():
         command = commands.add_parser(name)
         command.add_argument("--work-dir", type=Path, default=Path("work"))
         if name in {"search", "evaluate"}:
-            command.add_argument("--method", choices=["bm25", "dense"], default="bm25")
+            command.add_argument("--method", choices=["bm25", "dense", "hybrid"], default="hybrid")
             command.add_argument("--no-rerank", action="store_true")
         if name == "search":
             command.add_argument("--question", required=True)

@@ -3,6 +3,7 @@ import unittest
 from enterprise_retrieval.embedding import source_windows
 from enterprise_retrieval.index import PAYLOAD_TOKENS, prefix_coverage, token_windows
 from enterprise_retrieval.rerank import order_candidates
+from enterprise_retrieval.search import fuse
 
 
 class ChunkTests(unittest.TestCase):
@@ -101,3 +102,30 @@ class RerankingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 order_candidates([{"corpus_row": 1}], scores)
         self.assertEqual(order_candidates([], []), [])
+
+
+def document(row, score=0):
+    return dict(
+        corpus_row=row,
+        doc_id="colliding-id",
+        source_type="slack",
+        title="title",
+        content=str(row),
+        score=score,
+    )
+
+
+class EmbeddingTests(unittest.TestCase):
+    def test_overlap_fuses_rows_but_preserves_colliding_ids(self):
+        result = fuse([document(1), document(2)], [document(3), document(2)])
+        self.assertEqual([r["corpus_row"] for r in result], [2, 1, 3])
+        self.assertAlmostEqual(result[0]["score"], 2 / 62)
+        self.assertEqual(result[0]["lexical_rank"], 2)
+        self.assertEqual(result[0]["dense_rank"], 2)
+        self.assertEqual(len(fuse([document(1)], [document(2)], limit=1)), 1)
+
+    def test_fusion_rejects_repeated_or_changed_rows(self):
+        with self.assertRaises(ValueError):
+            fuse([document(1), document(1)], [])
+        with self.assertRaises(ValueError):
+            fuse([document(1)], [{**document(1), "content": "changed"}])

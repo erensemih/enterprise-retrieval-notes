@@ -73,6 +73,30 @@ def document_maxima(scores, parents, documents):
     )
 
 
+RRF_CONSTANT = 60
+
+
+def fuse(lexical, dense, limit=50):
+    combined = {}
+    for name, candidates in (("lexical", lexical), ("dense", dense)):
+        seen = set()
+        for rank, candidate in enumerate(candidates, 1):
+            row = candidate["corpus_row"]
+            if row in seen:
+                raise ValueError("Repeated corpus row within a candidate pool")
+            seen.add(row)
+            if row not in combined:
+                combined[row] = {**candidate, "score": 0.0}
+            entry = combined[row]
+            for field in ("doc_id", "source_type", "title", "content"):
+                if entry[field] != candidate[field]:
+                    raise ValueError("The same corpus row has different document contents")
+            entry["score"] += 1 / (RRF_CONSTANT + rank)
+            entry[f"{name}_rank"] = rank
+            entry[f"{name}_score"] = candidate["score"]
+    return sorted(combined.values(), key=lambda d: (-d["score"], d["corpus_row"]))[:limit]
+
+
 class Retriever:
     """Load only the models required by the requested retrieval configuration."""
 
@@ -123,12 +147,16 @@ class Retriever:
         with sqlite3.connect(f"{self.corpus_index.resolve().as_uri()}?mode=ro", uri=True) as db:
             return load_records(db, rows, values)
 
-    def search(self, question, method="bm25", feedback="none", generate=None, top_k=5):
-        if method not in {"bm25", "dense"} or feedback != "none":
+    def search(self, question, method="hybrid", feedback="none", generate=None, top_k=5):
+        if method not in {"bm25", "dense", "hybrid"} or feedback != "none":
             raise ValueError("Unsupported retrieval configuration")
         if not 1 <= top_k <= 50:
             raise ValueError("top_k must be between one and fifty")
-        candidates = self.dense(question) if method == "dense" else self.lexical(question)
+        lexical = self.lexical(question) if method != "dense" else []
+        dense = self.dense(question) if method != "bm25" else []
+        candidates = (
+            fuse(lexical, dense) if method == "hybrid" else dense if method == "dense" else lexical
+        )
         if self.reranker is not None:
             (candidates, _) = self.reranker.rank(question, candidates, "candidate_rank")
         return {"documents": candidates[:top_k], "feedback": {}}
