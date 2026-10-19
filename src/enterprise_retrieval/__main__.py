@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import corpus, rerank
+from . import corpus, index, rerank
 from .evaluation import evaluate
 from .search import Retriever
 
@@ -31,12 +31,17 @@ def main():
         corpus.prepare(work / "data")
         (work / "models").mkdir(parents=True, exist_ok=True)
         rerank.prepare(work / "models/reranker")
+        index.prepare_tokenizer(work / "models/tokenizer")
     elif args.command == "index":
         corpus.build_index(work / "data", work / "documents.sqlite")
+        index.prepare(
+            work / "data", work / "models/tokenizer", work / "documents.sqlite", work / "passages"
+        )
     else:
         generator = None
         retriever = Retriever(
             work / "documents.sqlite",
+            work / "passages",
             reranker_model=None if args.no_rerank else work / "models/reranker",
         )
         if args.command == "search":
