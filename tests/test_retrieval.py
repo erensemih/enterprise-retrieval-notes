@@ -1,5 +1,6 @@
 import unittest
 
+from enterprise_retrieval.embedding import source_windows
 from enterprise_retrieval.index import PAYLOAD_TOKENS, prefix_coverage, token_windows
 from enterprise_retrieval.rerank import order_candidates
 
@@ -33,6 +34,16 @@ class ChunkTests(unittest.TestCase):
 
 
 class ChunkRetrievalTests(unittest.TestCase):
+    def test_maximum_uses_all_chunks_and_preserves_document_order(self):
+        import torch
+
+        from enterprise_retrieval.search import document_maxima
+
+        scores = torch.tensor([[0.1, 0.9, 0.7, 0.6, 0.6], [1.0, 0.2, 0.3, 0.4, 0.8]])
+        parents = torch.tensor([0, 0, 1, 2, 2])
+        expected = torch.tensor([[0.9, 0.7, 0.6], [1.0, 0.3, 0.8]])
+        self.assertTrue(torch.equal(document_maxima(scores, parents, 3), expected))
+
     def test_best_documents_skips_repeated_chunks_without_merging_ids(self):
         from enterprise_retrieval.search import best_documents
 
@@ -41,6 +52,34 @@ class ChunkRetrievalTests(unittest.TestCase):
         selected = best_documents(hits)
         self.assertEqual([h["corpus_row"] for h in selected], list(range(1, 51)))
         self.assertEqual(selected[0]["chunk_row"], 0)
+
+
+class QwenEmbeddingTests(unittest.TestCase):
+    def test_last_real_token_with_either_padding_direction(self):
+        import torch
+
+        from enterprise_retrieval.embedding import last_token_pool
+
+        hidden = torch.arange(24).reshape(2, 4, 3)
+        masks = torch.tensor([[0, 0, 1, 1], [1, 1, 0, 0]])
+        self.assertTrue(torch.equal(last_token_pool(hidden, masks), hidden[[0, 1], [3, 1]]))
+        with self.assertRaises(ValueError):
+            last_token_pool(hidden, torch.zeros_like(masks))
+
+    def test_original_text_is_partitioned_without_decoding_bge_tokens(self):
+        documents = [{"title": "ABC", "content": "déf!"}, {"title": "", "content": ""}]
+        chunks = [
+            {"chunk_row": 1, "corpus_row": 1, "char_start": 0, "char_end": 5},
+            {"chunk_row": 2, "corpus_row": 1, "char_start": 5, "char_end": 8},
+            {"chunk_row": 3, "corpus_row": 2, "char_start": 0, "char_end": 1},
+        ]
+        self.assertEqual(
+            list(source_windows(documents, chunks)), [(1, 1, "ABC\nd"), (2, 1, "éf!"), (3, 2, "\n")]
+        )
+        with self.assertRaises(ValueError):
+            list(source_windows(documents, [{**chunks[0], "char_start": 1}]))
+        with self.assertRaises(ValueError):
+            list(source_windows(documents[:1], chunks[:1]))
 
 
 class RerankingTests(unittest.TestCase):

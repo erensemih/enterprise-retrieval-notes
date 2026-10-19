@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import corpus, index, rerank
+from . import corpus, embedding, index, rerank
 from .evaluation import evaluate
 from .search import Retriever
 
@@ -12,11 +12,11 @@ from .search import Retriever
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ["download", "index", "search", "evaluate"]:
+    for name in ["download", "index", "search", "evaluate", "embed"]:
         command = commands.add_parser(name)
         command.add_argument("--work-dir", type=Path, default=Path("work"))
         if name in {"search", "evaluate"}:
-            command.add_argument("--method", choices=["bm25"], default="bm25")
+            command.add_argument("--method", choices=["bm25", "dense"], default="bm25")
             command.add_argument("--no-rerank", action="store_true")
         if name == "search":
             command.add_argument("--question", required=True)
@@ -32,16 +32,23 @@ def main():
         (work / "models").mkdir(parents=True, exist_ok=True)
         rerank.prepare(work / "models/reranker")
         index.prepare_tokenizer(work / "models/tokenizer")
+        embedding.prepare(work / "models/embedding")
     elif args.command == "index":
         corpus.build_index(work / "data", work / "documents.sqlite")
         index.prepare(
             work / "data", work / "models/tokenizer", work / "documents.sqlite", work / "passages"
+        )
+    elif args.command == "embed":
+        embedding.encode(
+            work / "passages", work / "data", work / "models/embedding", work / "vectors"
         )
     else:
         generator = None
         retriever = Retriever(
             work / "documents.sqlite",
             work / "passages",
+            work / "vectors" if args.method != "bm25" else None,
+            work / "models/embedding" if args.method != "bm25" else None,
             reranker_model=None if args.no_rerank else work / "models/reranker",
         )
         if args.command == "search":
