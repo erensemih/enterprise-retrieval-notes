@@ -1,0 +1,12 @@
+Suggest additional keywords for a second BM25 search of enterprise documents.
+Use the original question to preserve its intent, entities, dates and constraints.
+Suggest synonyms, alternative expressions, abbreviations or other related search keywords
+that might find relevant documents missed by the original search. Do not answer the question.
+Do not invent internal identifiers, people or product names. Prefer useful additions over
+restating words already in the question. Return only JSON with this exact structure:
+{"keywords": ["keyword or short phrase", "another keyword"]}
+Return at most 3 distinct keywords or phrases, each containing 1 to 4 words. An empty list
+is allowed if no useful additions can be suggested. Do not include explanations or Markdown.
+Be selective: prefer single words or abbreviations. Each entry should introduce a useful
+searchable word absent from the question. Do not fill the budget with near-duplicate
+phrases or generic terms. Return fewer than three entries, or an empty list, when appropriate.

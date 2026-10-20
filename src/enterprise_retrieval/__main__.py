@@ -2,10 +2,12 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from . import corpus, embedding, index, rerank
 from .evaluation import evaluate
+from .feedback import ChatEndpoint
 from .search import Retriever
 
 
@@ -18,6 +20,11 @@ def main():
         if name in {"search", "evaluate"}:
             command.add_argument("--method", choices=["bm25", "dense", "hybrid"], default="hybrid")
             command.add_argument("--no-rerank", action="store_true")
+            command.add_argument(
+                "--feedback", choices=("none", "question", "counts"), default="none"
+            )
+            command.add_argument("--feedback-url")
+            command.add_argument("--feedback-model", default="Qwen/Qwen3-32B")
         if name == "search":
             command.add_argument("--question", required=True)
         if name == "evaluate":
@@ -44,6 +51,12 @@ def main():
         )
     else:
         generator = None
+        if args.feedback != "none":
+            if not args.feedback_url:
+                parser.error("Feedback requires --feedback-url")
+            generator = ChatEndpoint(
+                args.feedback_url, args.feedback_model, os.environ.get("FEEDBACK_API_KEY")
+            )
         retriever = Retriever(
             work / "documents.sqlite",
             work / "passages",
@@ -52,7 +65,7 @@ def main():
             reranker_model=None if args.no_rerank else work / "models/reranker",
         )
         if args.command == "search":
-            result = retriever.search(args.question, args.method, "none", generator)
+            result = retriever.search(args.question, args.method, args.feedback, generator)
             print(json.dumps(result, indent=2))
         else:
             if args.output.exists():
@@ -67,7 +80,7 @@ def main():
                     for q in questions
                     if (q["question_id"] in heldout) == (args.split == "heldout")
                 ]
-            result = evaluate(retriever, questions, args.method, "none", generator)
+            result = evaluate(retriever, questions, args.method, args.feedback, generator)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             corpus.write_json(args.output, result)
 

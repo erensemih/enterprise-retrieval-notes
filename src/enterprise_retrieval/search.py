@@ -148,15 +148,39 @@ class Retriever:
             return load_records(db, rows, values)
 
     def search(self, question, method="hybrid", feedback="none", generate=None, top_k=5):
-        if method not in {"bm25", "dense", "hybrid"} or feedback != "none":
-            raise ValueError("Unsupported retrieval configuration")
+        from .feedback import expansion_messages, keywords, match_counts
+
+        if method not in {"bm25", "dense", "hybrid"}:
+            raise ValueError("Method must be bm25, dense or hybrid")
+        if feedback not in {"none", "question", "counts"}:
+            raise ValueError("Unknown feedback approach")
         if not 1 <= top_k <= 50:
             raise ValueError("top_k must be between one and fifty")
-        lexical = self.lexical(question) if method != "dense" else []
-        dense = self.dense(question) if method != "bm25" else []
-        candidates = (
-            fuse(lexical, dense) if method == "hybrid" else dense if method == "dense" else lexical
-        )
+        if feedback != "none" and (generate is None or method == "dense"):
+            raise ValueError("Feedback requires a generator and a BM25 branch")
+        details = {}
+        lexical = []
+        if method != "dense":
+            if feedback != "question":
+                lexical = self.lexical(question)
+            if feedback in {"question", "counts"}:
+                record = {"question": question}
+                mode = "short_question"
+                if feedback == "counts":
+                    mode = "short_counts"
+                    record.update(
+                        retrieved_document_count=len(lexical),
+                        term_counts=match_counts(question, lexical),
+                    )
+                additions = keywords(generate(expansion_messages(record, mode), 192), question)
+                query = question + (" " + " ".join(additions) if additions else "")
+                lexical = self.lexical(query)
+                details = {"keywords": additions, "search_query": query}
+        if method == "bm25":
+            candidates = lexical
+        else:
+            dense = self.dense(question)
+            candidates = dense if method == "dense" else fuse(lexical, dense)
         if self.reranker is not None:
             (candidates, _) = self.reranker.rank(question, candidates, "candidate_rank")
-        return {"documents": candidates[:top_k], "feedback": {}}
+        return {"documents": candidates[:top_k], "feedback": details}
