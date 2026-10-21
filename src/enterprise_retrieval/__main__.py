@@ -1,4 +1,4 @@
-"""Index and search the enterprise document corpus."""
+"""Command-line entry points for indexing, retrieval and evaluation."""
 
 import argparse
 import json
@@ -11,17 +11,29 @@ from .feedback import ChatEndpoint
 from .search import Retriever
 
 
+def load_retriever(args):
+    work = args.work_dir
+    dense = args.method != "bm25"
+    return Retriever(
+        work / "documents.sqlite",
+        work / "passages",
+        work / "vectors" if dense else None,
+        work / "models/embedding" if dense else None,
+        None if args.no_rerank else work / "models/reranker",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ["download", "index", "search", "evaluate", "embed"]:
+    for name in ("download", "index", "embed", "search", "evaluate"):
         command = commands.add_parser(name)
         command.add_argument("--work-dir", type=Path, default=Path("work"))
         if name in {"search", "evaluate"}:
-            command.add_argument("--method", choices=["bm25", "dense", "hybrid"], default="hybrid")
+            command.add_argument("--method", choices=("bm25", "dense", "hybrid"), default="hybrid")
             command.add_argument("--no-rerank", action="store_true")
             command.add_argument(
-                "--feedback", choices=("none", "question", "counts"), default="none"
+                "--feedback", choices=("none", "question", "counts", "followup"), default="none"
             )
             command.add_argument("--feedback-url")
             command.add_argument("--feedback-model", default="Qwen/Qwen3-32B")
@@ -37,9 +49,9 @@ def main():
     if args.command == "download":
         corpus.prepare(work / "data")
         (work / "models").mkdir(parents=True, exist_ok=True)
-        rerank.prepare(work / "models/reranker")
         index.prepare_tokenizer(work / "models/tokenizer")
         embedding.prepare(work / "models/embedding")
+        rerank.prepare(work / "models/reranker")
     elif args.command == "index":
         corpus.build_index(work / "data", work / "documents.sqlite")
         index.prepare(
@@ -50,22 +62,24 @@ def main():
             work / "passages", work / "data", work / "models/embedding", work / "vectors"
         )
     else:
-        generator = None
-        if args.feedback != "none":
-            if not args.feedback_url:
-                parser.error("Feedback requires --feedback-url")
-            generator = ChatEndpoint(
-                args.feedback_url, args.feedback_model, os.environ.get("FEEDBACK_API_KEY")
-            )
-        retriever = Retriever(
-            work / "documents.sqlite",
-            work / "passages",
-            work / "vectors" if args.method != "bm25" else None,
-            work / "models/embedding" if args.method != "bm25" else None,
-            reranker_model=None if args.no_rerank else work / "models/reranker",
+        if args.feedback != "none" and not args.feedback_url:
+            parser.error("--feedback requires --feedback-url pointing to a hosted chat model")
+        generator = (
+            ChatEndpoint(args.feedback_url, args.feedback_model, os.environ.get("FEEDBACK_API_KEY"))
+            if args.feedback != "none"
+            else None
         )
+        retriever = load_retriever(args)
         if args.command == "search":
             result = retriever.search(args.question, args.method, args.feedback, generator)
+            result["documents"] = [
+                {
+                    key: doc[key]
+                    for key in ("corpus_row", "doc_id", "title", "score", "reranker_score")
+                    if key in doc
+                }
+                for doc in result["documents"]
+            ]
             print(json.dumps(result, indent=2))
         else:
             if args.output.exists():
@@ -83,6 +97,7 @@ def main():
             result = evaluate(retriever, questions, args.method, args.feedback, generator)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             corpus.write_json(args.output, result)
+            print(json.dumps({k: v for k, v in result.items() if k != "cases"}, indent=2))
 
 
 if __name__ == "__main__":

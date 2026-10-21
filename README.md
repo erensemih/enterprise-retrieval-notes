@@ -24,3 +24,5 @@ Qwen embeddings add exact dense retrieval over those same passages.
 BM25 and dense candidates are combined with equal reciprocal rank fusion.
 
 Count-aware keyword expansion and a question-only control are available.
+
+A missing-information decision can request one additional BM25 search.

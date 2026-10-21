@@ -2,10 +2,13 @@ import json
 import unittest
 
 from enterprise_retrieval.feedback import expansion_messages as messages
+from enterprise_retrieval.feedback import followup_messages as build_messages
 from enterprise_retrieval.feedback import (
     keywords,
     match_counts,
+    parse_decision,
     parse_keywords,
+    second_round,
     terms,
     weighted_fuse,
 )
@@ -20,6 +23,93 @@ def document(row, content="Evidence"):
         "content": content,
         "score": -1.0,
     }
+
+
+class FollowupTests(unittest.TestCase):
+    def test_only_five_clipped_sources_and_question_reach_model(self):
+        record = {
+            "question": "Who was affected?",
+            "candidates": [document(i, "a" * 5000) for i in range(1, 51)],
+            "gold_answer": "SECRET LABEL",
+            "answer_facts": ["SECRET FACT"],
+            "expected_doc_ids": ["SECRET ID"],
+        }
+        messages = build_messages(record)
+        payload = json.loads(messages[1]["content"])
+        self.assertEqual(set(payload), {"original_question", "provided_sources"})
+        self.assertEqual(len(payload["provided_sources"]), 5)
+        self.assertEqual(len(payload["provided_sources"][0]["excerpt"]), 4500)
+        self.assertTrue(payload["provided_sources"][0]["excerpt_clipped"])
+        self.assertNotIn("SECRET", json.dumps(messages))
+        self.assertNotIn("doc_id", messages[1]["content"])
+
+    def test_stop_does_not_search_and_preserves_original_ranking(self):
+        decision = parse_decision(
+            json.dumps(
+                {
+                    "needs_more_evidence": False,
+                    "assessment": "All requested information is present.",
+                    "missing_information": [],
+                    "follow_up_question": None,
+                }
+            )
+        )
+        original = [document(i) for i in range(50)]
+
+        def forbidden_search(question):
+            self.fail("The stop branch must never perform a second search")
+
+        result = second_round({"candidates": original}, decision, forbidden_search)
+        self.assertIs(result["candidates"], original)
+        self.assertEqual(result["second_candidates"], [])
+
+    def test_second_search_uses_followup_alone_and_merges_unique_rows(self):
+        decision = parse_decision(
+            json.dumps(
+                {
+                    "needs_more_evidence": True,
+                    "assessment": "Cause is covered; customer impact is not.",
+                    "missing_information": ["Affected customers"],
+                    "follow_up_question": "Which customers were affected by the outage?",
+                }
+            )
+        )
+        observed = []
+
+        def retrieve(question):
+            observed.append(question)
+            return ([document(i) for i in (*range(50, 75), *range(25, 50))], [])
+
+        result = second_round(
+            {"question": "What happened and why?", "candidates": [document(i) for i in range(50)]},
+            decision,
+            retrieve,
+        )
+        rows = [d["corpus_row"] for d in result["candidates"]]
+        self.assertEqual(observed, [decision["follow_up_question"]])
+        self.assertEqual(len(rows), 50)
+        self.assertEqual(len(set(rows)), 50)
+        self.assertTrue(set(rows) & set(range(50, 75)))
+        self.assertTrue(set(rows) & set(range(25)))
+        self.assertTrue(set(rows[:25]) <= set(range(25, 50)))
+
+    def test_inconsistent_decisions_are_rejected_without_fallback(self):
+        valid = {
+            "needs_more_evidence": True,
+            "assessment": "Missing impact.",
+            "missing_information": ["Impact"],
+            "follow_up_question": "Who was affected?",
+        }
+        for changes in (
+            {"needs_more_evidence": "true"},
+            {"missing_information": []},
+            {"follow_up_question": None},
+            {"needs_more_evidence": False},
+            {"follow_up_question": " ".join((f"word{i}" for i in range(129)))},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                parse_decision(json.dumps({**valid, **changes}))
+        self.assertEqual(parse_decision("```json\n" + json.dumps(valid) + "\n```"), valid)
 
 
 def doc(row):
@@ -167,7 +257,6 @@ class PipelineFeedbackTests(unittest.TestCase):
         self.retriever.lexical = lexical
 
     def test_question_control_needs_only_one_augmented_search(self):
-
         def generate(messages, max_tokens):
             self.assertEqual(json.loads(messages[1]["content"]), {"question": "offboarding"})
             self.assertEqual(max_tokens, 192)

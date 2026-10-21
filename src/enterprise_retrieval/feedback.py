@@ -4,12 +4,13 @@ import json
 import math
 import re
 import sqlite3
+import time
 import urllib.request
 from pathlib import Path
 
 PROMPTS = Path(__file__).parent / "prompts"
-
 SHORT_SYSTEM = (PROMPTS / "expansion.txt").read_text()
+FOLLOWUP_SYSTEM = (PROMPTS / "followup.txt").read_text()
 
 MAX_KEYWORDS = 8
 
@@ -65,6 +66,7 @@ def parse_keywords(raw, question):
 
 
 SHORT_MODES = ("short_question", "short_counts", "guided_counts")
+
 
 COUNT_GUIDANCE = """
 The counts report how many of the original top50 retrieved documents match each original
@@ -123,6 +125,82 @@ def weighted_fuse(original, expanded, expansion_weight, limit=50):
             entry["score"] += weight / (60 + rank)
             entry[name + "_rank"] = rank
     return sorted(merged.values(), key=lambda d: (-d["score"], d["corpus_row"]))[:limit]
+
+
+CONTEXT_DOCUMENTS = 5
+
+
+CONTENT_CHARS = 4500
+
+
+def provided_sources(candidates):
+    return [
+        {
+            "label": f"S{i}",
+            "title": doc["title"],
+            "excerpt": doc["content"][:CONTENT_CHARS],
+            "excerpt_clipped": len(doc["content"]) > CONTENT_CHARS,
+        }
+        for i, doc in enumerate(candidates[:CONTEXT_DOCUMENTS], 1)
+    ]
+
+
+def followup_messages(record):
+    # Project allowed fields explicitly; reference labels never enter the prompt.
+    return [
+        {"role": "system", "content": FOLLOWUP_SYSTEM},
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "original_question": record["question"],
+                    "provided_sources": provided_sources(record["candidates"]),
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+
+
+def parse_decision(raw):
+    fenced = re.fullmatch(r"\s*```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```\s*", raw, re.I)
+    value = json.loads(fenced.group(1) if fenced else raw)
+    keys = {"needs_more_evidence", "assessment", "missing_information", "follow_up_question"}
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError("Expected exactly the four decision fields")
+    if type(value["needs_more_evidence"]) is not bool:
+        raise ValueError("needs_more_evidence must be a Boolean")
+    if not isinstance(value["assessment"], str) or not value["assessment"].strip():
+        raise ValueError("Assessment must be nonempty text")
+    missing, followup = value["missing_information"], value["follow_up_question"]
+    if not isinstance(missing, list) or any(
+        not isinstance(item, str) or not item.strip() for item in missing
+    ):
+        raise ValueError("Missing information must be a list of nonempty strings")
+    if value["needs_more_evidence"]:
+        if not missing or not isinstance(followup, str) or not 1 <= len(terms(followup)) <= 128:
+            raise ValueError("A search decision requires a gap and a searchable follow-up")
+    elif missing or followup is not None:
+        raise ValueError("A stop decision must have no gap or follow-up")
+    return value
+
+
+def second_round(record, decision, retrieve):
+    if not decision["needs_more_evidence"]:
+        return {
+            "second_candidates": [],
+            "matched_chunks": [],
+            "candidates": record["candidates"],
+            "search_seconds": 0.0,
+        }
+    started = time.monotonic()
+    candidates, matched = retrieve(decision["follow_up_question"])
+    return {
+        "second_candidates": candidates,
+        "matched_chunks": matched,
+        "candidates": weighted_fuse(record["candidates"], candidates, 1.0, limit=50),
+        "search_seconds": time.monotonic() - started,
+    }
 
 
 class ChatEndpoint:

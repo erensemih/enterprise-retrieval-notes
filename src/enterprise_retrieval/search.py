@@ -137,7 +137,7 @@ class Retriever:
 
         if self.encoder is None:
             raise ValueError("No dense model was loaded")
-        (vectors, _) = self.encoder.encode([self.encoder.query_prefix + question])
+        vectors, _ = self.encoder.encode([self.encoder.query_prefix + question])
         with torch.inference_mode():
             scores = vectors @ self.matrix.T
             reduced = document_maxima(scores, self.parents, self.documents)
@@ -148,19 +148,29 @@ class Retriever:
             return load_records(db, rows, values)
 
     def search(self, question, method="hybrid", feedback="none", generate=None, top_k=5):
-        from .feedback import expansion_messages, keywords, match_counts
+        from .feedback import (
+            expansion_messages,
+            followup_messages,
+            keywords,
+            match_counts,
+            parse_decision,
+            second_round,
+        )
 
         if method not in {"bm25", "dense", "hybrid"}:
             raise ValueError("Method must be bm25, dense or hybrid")
-        if feedback not in {"none", "question", "counts"}:
+        if feedback not in {"none", "question", "counts", "followup"}:
             raise ValueError("Unknown feedback approach")
         if not 1 <= top_k <= 50:
             raise ValueError("top_k must be between one and fifty")
         if feedback != "none" and (generate is None or method == "dense"):
             raise ValueError("Feedback requires a generator and a BM25 branch")
+        if feedback == "followup" and method != "bm25":
+            raise ValueError("The follow-up experiment uses BM25, with optional reranking")
         details = {}
         lexical = []
         if method != "dense":
+            # Question-only expansion does not need a preliminary BM25 search.
             if feedback != "question":
                 lexical = self.lexical(question)
             if feedback in {"question", "counts"}:
@@ -176,11 +186,23 @@ class Retriever:
                 query = question + (" " + " ".join(additions) if additions else "")
                 lexical = self.lexical(query)
                 details = {"keywords": additions, "search_query": query}
+            elif feedback == "followup":
+                record = {"question": question, "candidates": lexical}
+                decision = parse_decision(generate(followup_messages(record), 512))
+                result = second_round(
+                    record,
+                    decision,
+                    lambda query: bm25_search(
+                        self.chunks_dir / "bm25.sqlite", self.corpus_index, query
+                    ),
+                )
+                lexical = result["candidates"]
+                details = decision
         if method == "bm25":
             candidates = lexical
         else:
             dense = self.dense(question)
             candidates = dense if method == "dense" else fuse(lexical, dense)
         if self.reranker is not None:
-            (candidates, _) = self.reranker.rank(question, candidates, "candidate_rank")
+            candidates, _ = self.reranker.rank(question, candidates, "candidate_rank")
         return {"documents": candidates[:top_k], "feedback": details}
