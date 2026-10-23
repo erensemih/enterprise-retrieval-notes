@@ -70,6 +70,14 @@ python -m pip install -e '.[dev]'
 python -m unittest discover -s tests
 ```
 
+## Performance measurements
+
+On 100 sequential queries after five warm-ups, retrieval took **5.84 s median**
+and **8.91 s p95** on one A100. Models and vectors were resident; SQLite indices
+were staged on RAM-backed tmpfs. BM25 took 5.10 s median and reranking 0.70 s.
+Setup, network and answer generation are excluded. The passage BM25 index is
+4.84 GB; the vector matrix is 6.56 GB.
+
 The [source package](src/enterprise_retrieval) contains the pipeline and prompts;
 [tests](tests) cover ranking, source identity, label isolation and evaluation.
 Code is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md).
