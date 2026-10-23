@@ -1,0 +1,9 @@
+method,split,questions,scorable,reference_recall_at_5_percent
+bm25,development,401,375,62.22
+bge_dense,development,401,375,42.32
+qwen_dense,development,401,375,46.74
+hybrid,development,401,375,65.21
+bm25_reranked,development,401,375,68.05
+hybrid_reranked,development,401,375,71.82
+hybrid_reranked,heldout,99,94,70.94
+hybrid_reranked,all,500,469,71.65

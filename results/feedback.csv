@@ -1,0 +1,5 @@
+method,reference_recall_at_5_percent,baseline_percent,difference_pp,interval_95_low_pp,interval_95_high_pp
+short_question,69.88,68.05,1.83,,
+short_counts,70.06,68.05,2.01,0.43,3.87
+expanded_hybrid,71.9,71.82,0.07,-1.26,1.43
+followup,68.62,68.05,0.57,-0.71,1.92
